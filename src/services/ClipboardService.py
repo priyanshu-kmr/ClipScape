@@ -11,14 +11,13 @@ import threading
 import time
 from dataclasses import dataclass
 from typing import Callable, Optional, Union, Dict, Any
-import keyboard
 
 from clipboard import get_clipboard_item, ClipboardItem
 
 logger = logging.getLogger(__name__)
 
 # Default hotkey for developer builds. ``ctrl+alt+9`` is rarely used by Windows apps.
-DEFAULT_HOTKEY = "ctrl+alt+9"
+
 
 
 @dataclass(frozen=True)
@@ -44,7 +43,6 @@ class ClipboardService:
 
     def __init__(
         self,
-        hotkey: str = DEFAULT_HOTKEY,
         on_capture: Optional[Callable[[CapturedClipboard], None]] = None,
         auto_register: bool = False,
     ) -> None:
@@ -55,12 +53,13 @@ class ClipboardService:
             on_capture: Optional callback that receives the ``CapturedClipboard``.
             auto_register: When ``True`` the hotkey is registered immediately.
         """
-        self.hotkey = hotkey
         self._on_capture = on_capture or self._default_handler
         self._lock = threading.RLock()
         self._stop_event = threading.Event()
-        self._hotkey_handle: Optional[int] = None
-        self._is_registered = False
+        self._poll_thread: Optional[threading.Thread] = None
+        self._is_running = False
+        # default poll interval (seconds)
+        self.poll_interval = 0.25
 
         if auto_register:
             self.start()
@@ -69,47 +68,49 @@ class ClipboardService:
     # Lifecycle management
     # ---------------------------------------------------------------------
     def start(self) -> None:
-        """Register the configured hotkey."""
-        if keyboard is None:
-            raise RuntimeError(
-                "The 'keyboard' package is required to use ClipboardService hotkeys. "
-                "Install it with 'pip install keyboard'."
-            )
+        """Start background polling of the clipboard.
 
+        The polling thread snapshots the clipboard and calls the configured
+        capture callback when a change is detected.
+        """
         with self._lock:
-            if self._is_registered:
-                logger.debug("ClipboardService hotkey already registered")
+            if self._is_running:
+                logger.debug("ClipboardService already running")
                 return
 
-            logger.info("Registering clipboard hotkey: %s", self.hotkey)
+            logger.info("Starting ClipboardService polling (interval=%s)s", self.poll_interval)
             self._stop_event.clear()
-            self._hotkey_handle = keyboard.add_hotkey(
-                self.hotkey,
-                callback=self._handle_hotkey,
-                suppress=False,
-                trigger_on_release=True,
-            )
-            self._is_registered = True
+            self._is_running = True
+            self._poll_thread = threading.Thread(target=self._poll_loop, daemon=True)
+            self._poll_thread.start()
 
     def stop(self) -> None:
-        """Remove the hotkey and stop the listener."""
+        """Stop the background polling thread."""
         with self._lock:
-            if not self._is_registered:
+            if not self._is_running:
                 return
 
-            logger.info("Unregistering clipboard hotkey: %s", self.hotkey)
-            if self._hotkey_handle is not None and keyboard is not None:
-                keyboard.remove_hotkey(self._hotkey_handle)
-            self._hotkey_handle = None
-            self._is_registered = False
+            logger.info("Stopping ClipboardService polling")
+            self._is_running = False
             self._stop_event.set()
 
+        # join thread outside the lock
+        if self._poll_thread is not None:
+            self._poll_thread.join(timeout=1.0)
+            self._poll_thread = None
+
     def run_forever(self, poll_interval: float = 0.25) -> None:
-        """Convenience loop that keeps the service alive until ``stop`` is called."""
+        """Run the service in the foreground until stopped.
+
+        This method sets the polling interval and blocks until `stop()` is
+        called or Ctrl+C is pressed.
+        """
         try:
-            if not self._is_registered:
+            self.poll_interval = poll_interval
+            if not self._is_running:
                 self.start()
 
+            # block until stop
             while not self._stop_event.wait(timeout=poll_interval):
                 continue
         except KeyboardInterrupt:  # Allow Ctrl+C exits during development.
@@ -121,14 +122,40 @@ class ClipboardService:
     # Event handling
     # ---------------------------------------------------------------------
     def _handle_hotkey(self) -> None:
-        """Internal keyboard callback for hotkey activation."""
+        """Deprecated placeholder kept for compatibility.
+
+        Hotkeys were removed in favor of polling. This method still snapshots
+        the clipboard if called directly.
+        """
         try:
-            logger.debug("Hotkey pressed; capturing clipboard")
             item = get_clipboard_item()
             captured = CapturedClipboard.from_item(item)
             self._on_capture(captured)
         except Exception as exc:  # pragma: no cover - defensive guard
             logger.exception("Failed to capture clipboard: %s", exc)
+
+    def _poll_loop(self) -> None:
+        """Background polling loop."""
+        last_meta = None
+        last_payload = None
+        while not self._stop_event.is_set():
+            try:
+                item = get_clipboard_item()
+                payload = getattr(item, "payload", None)
+                meta = getattr(item, "metaData", None)
+            except Exception:
+                payload, meta = None, None
+
+            if meta is not None and (meta != last_meta or payload != last_payload):
+                try:
+                    captured = CapturedClipboard.from_item(item)
+                    self._on_capture(captured)
+                except Exception:
+                    logger.exception("Error while calling on_capture")
+                last_meta = meta
+                last_payload = payload
+
+            self._stop_event.wait(self.poll_interval)
 
     @staticmethod
     def _default_handler(captured: CapturedClipboard) -> None:
@@ -162,7 +189,7 @@ def main() -> None:  # pragma: no cover - manual development hook
     logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 
     service = ClipboardService(auto_register=True)
-    logger.info("ClipboardService running; press %s to capture, Ctrl+C to exit", DEFAULT_HOTKEY)
+    logger.info("ClipboardService running (polling). Ctrl+C to exit")
 
     try:
         service.run_forever()
