@@ -58,7 +58,7 @@ class RedisConfig:
     def from_env(cls, *, env_path: Optional[Path] = None) -> "RedisConfig":
         _load_env_file(env_path)
 
-        uri = os.getenv("REDIS_URI") or os.getenv("REDIS_URL")
+        uri = os.getenv("REDIS_URI")
         if uri:
             return cls.from_uri(uri)
 

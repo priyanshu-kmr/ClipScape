@@ -7,15 +7,36 @@ This module handles peer discovery, signaling, and network coordination.
 import asyncio
 import socket
 import json
+import os
 from typing import List, Tuple, Optional, Dict, Callable
 from network.peer import ClipScapePeer
+from pathlib import Path
+from dotenv import load_dotenv
 
+
+# Load .env from the repository root (two parents up from this file)
+try:
+    REPO_ROOT = Path(__file__).resolve().parents[2]
+    env_file = REPO_ROOT / ".env"
+    if env_file.exists():
+        load_dotenv(dotenv_path=env_file)
+    else:
+        load_dotenv()  # fallback to default behavior
+except Exception:
+    pass
 
 # Network constants
 DELIM = b"\n---END_SDP---\n"
-BROADCAST_PORT = 9999
 BROADCAST_MSG = b"CLIPSCAPE_DISCOVER"
-DEFAULT_SIGNAL_PORT = 9999
+
+# Use NETWORK_PORT from .env / environment, fallback to 9999
+try:
+    NETWORK_PORT = int(os.getenv("NETWORK_PORT", "9999"))
+except ValueError:
+    NETWORK_PORT = 9999
+
+BROADCAST_PORT = NETWORK_PORT
+DEFAULT_SIGNAL_PORT = NETWORK_PORT
 
 
 class ClipScapeNetwork:
