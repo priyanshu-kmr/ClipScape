@@ -29,6 +29,14 @@ from typing import Optional
 
 import pytest
 
+# Ensure the project's `src` directory is on sys.path so tests can import
+# packages using the same top-level names as the application.
+import sys
+ROOT = Path(__file__).resolve().parents[1]
+SRC = str(ROOT / "src")
+if SRC not in sys.path:
+    sys.path.insert(0, SRC)
+
 from services.PeerNetworkService import PeerNetworkService
 
 logger = logging.getLogger(__name__)
