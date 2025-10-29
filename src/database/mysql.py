@@ -1,7 +1,7 @@
 import mysql.connector
 from mysql.connector import Error
 from datetime import datetime
-from schema import ClipboardLog, Shared
+from src.schema import ClipboardLog, Shared
 
 class MySQLOps:
     def __init__(self, host: str, user: str, password: str, database: str, port: int = 3306) -> None:
