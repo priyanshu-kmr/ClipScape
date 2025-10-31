@@ -1,24 +1,18 @@
 import json
-import time
 import uuid
-from typing import Optional, Callable, Any
+from typing import Optional, Callable
 from aiortc import RTCPeerConnection, RTCSessionDescription, RTCConfiguration, RTCIceServer, RTCDataChannel
 
 
 class ClipScapePeer:
 
-    def __init__(self, peer_id: str, peer_name: str = "Unknown", ice_servers: list = None):
+    def __init__(self, peer_id: str, peer_name: str = "Unknown"):
         self.peer_id = peer_id
         self.peer_name = peer_name
         self.is_connected = False
-        self.is_offerer = False
-        self.last_pong_time = time.time()
-        self.last_ping_time = 0
         self._chunk_buffer = {}
 
-        if ice_servers is None:
-            ice_servers = [RTCIceServer(urls="stun:stun.l.google.com:19302")]
-
+        ice_servers = [RTCIceServer(urls="stun:stun.l.google.com:19302")]
         config = RTCConfiguration(iceServers=ice_servers)
         self.pc = RTCPeerConnection(configuration=config)
         self.data_channel: Optional[RTCDataChannel] = None
@@ -31,9 +25,7 @@ class ClipScapePeer:
         @self.pc.on("connectionstatechange")
         async def on_connection_state_change():
             state = self.pc.connectionState
-            if state == "connected":
-                self.is_connected = True
-            elif state in ["failed", "closed", "disconnected"]:
+            if state in ["failed", "closed", "disconnected"]:
                 self.is_connected = False
                 if self.on_close_callback:
                     self.on_close_callback()
@@ -47,48 +39,36 @@ class ClipScapePeer:
         @channel.on("open")
         def on_open():
             self.is_connected = True
-            self.last_pong_time = time.time()
-            self.last_ping_time = time.time()
             if self.on_open_callback:
                 self.on_open_callback()
 
         @channel.on("message")
         def on_message(message):
-            try:
-                if message == "__PING__":
-                    self.send_message("__PONG__")
+            if isinstance(message, str) and message.startswith("__CHUNK__"):
+                try:
+                    chunk_data = json.loads(message[9:])
+                    chunk_id = chunk_data["id"]
+                    chunk_index = chunk_data["index"]
+                    total_chunks = chunk_data["total"]
+                    chunk_content = chunk_data["data"]
+
+                    if chunk_id not in self._chunk_buffer:
+                        self._chunk_buffer[chunk_id] = {}
+
+                    self._chunk_buffer[chunk_id][chunk_index] = chunk_content
+
+                    if len(self._chunk_buffer[chunk_id]) == total_chunks:
+                        full_message = "".join(
+                            self._chunk_buffer[chunk_id][i]
+                            for i in range(total_chunks)
+                        )
+                        del self._chunk_buffer[chunk_id]
+
+                        if self.on_message_callback:
+                            self.on_message_callback(full_message)
                     return
-                elif message == "__PONG__":
-                    self.last_pong_time = time.time()
-                    return
-
-                if isinstance(message, str) and message.startswith("__CHUNK__"):
-                    try:
-                        chunk_data = json.loads(message[9:])
-                        chunk_id = chunk_data["id"]
-                        chunk_index = chunk_data["index"]
-                        total_chunks = chunk_data["total"]
-                        chunk_content = chunk_data["data"]
-
-                        if chunk_id not in self._chunk_buffer:
-                            self._chunk_buffer[chunk_id] = {}
-
-                        self._chunk_buffer[chunk_id][chunk_index] = chunk_content
-
-                        if len(self._chunk_buffer[chunk_id]) == total_chunks:
-                            full_message = "".join(
-                                self._chunk_buffer[chunk_id][i]
-                                for i in range(total_chunks)
-                            )
-                            del self._chunk_buffer[chunk_id]
-
-                            if self.on_message_callback:
-                                self.on_message_callback(full_message)
-                        return
-                    except Exception:
-                        pass
-            except Exception:
-                pass
+                except Exception:
+                    pass
 
             if self.on_message_callback:
                 self.on_message_callback(message)
@@ -101,11 +81,7 @@ class ClipScapePeer:
 
     async def create_offer(self) -> dict:
         self.is_offerer = True
-        self.data_channel = self.pc.createDataChannel(
-            "clipscape",
-            ordered=True,
-            maxRetransmits=3
-        )
+        self.data_channel = self.pc.createDataChannel("clipscape")
         self._setup_data_channel_handlers(self.data_channel)
         offer = await self.pc.createOffer()
         await self.pc.setLocalDescription(offer)
@@ -167,15 +143,6 @@ class ClipScapePeer:
         except Exception:
             return False
 
-    def send_ping(self) -> bool:
-        self.last_ping_time = time.time()
-        return self.send_message("__PING__")
-
-    def is_alive(self, timeout: float = 15.0) -> bool:
-        if not self.is_connected:
-            return False
-        return (time.time() - self.last_pong_time) < timeout
-
     def on_message(self, callback: Callable[[str], None]):
         self.on_message_callback = callback
 
@@ -190,8 +157,3 @@ class ClipScapePeer:
             self.data_channel.close()
         await self.pc.close()
         self.is_connected = False
-
-    def __repr__(self):
-        status = "connected" if self.is_connected else "disconnected"
-        role = "offerer" if self.is_offerer else "answerer"
-        return f"<ClipScapePeer {self.peer_name} ({self.peer_id}) - {status}, {role}>"

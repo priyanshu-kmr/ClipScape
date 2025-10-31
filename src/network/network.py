@@ -37,7 +37,6 @@ class ClipScapeNetwork:
         self.peers: Dict[str, ClipScapePeer] = {}
         self.server: Optional[asyncio.Server] = None
         self.udp_responder_task: Optional[asyncio.Task] = None
-        self.heartbeat_task: Optional[asyncio.Task] = None
         self.running = False
         self.on_peer_connected_callback: Optional[Callable[[
             ClipScapePeer], None]] = None
@@ -164,9 +163,6 @@ class ClipScapeNetwork:
 
                 self.peers[peer_id] = peer
 
-                if self.on_peer_connected_callback:
-                    self.on_peer_connected_callback(peer)
-
         except asyncio.TimeoutError:
             pass
         except Exception:
@@ -210,9 +206,6 @@ class ClipScapeNetwork:
                 await peer.handle_answer(answer_obj["sdp"])
                 self.peers[peer_id] = peer
 
-                if self.on_peer_connected_callback:
-                    self.on_peer_connected_callback(peer)
-
                 writer.close()
                 await writer.wait_closed()
                 return True
@@ -230,6 +223,13 @@ class ClipScapeNetwork:
             except Exception:
                 pass
 
+        def on_open():
+            try:
+                if self.on_peer_connected_callback:
+                    self.on_peer_connected_callback(peer)
+            except Exception:
+                pass
+
         def on_close():
             try:
                 peer_id = peer.peer_id
@@ -241,36 +241,12 @@ class ClipScapeNetwork:
                 pass
 
         peer.on_message(on_message)
+        peer.on_open(on_open)
         peer.on_close(on_close)
-
-    async def heartbeat_loop(self):
-        while self.running:
-            await asyncio.sleep(5.0)
-
-            dead_peers = []
-            for peer_id, peer in list(self.peers.items()):
-                if peer.is_connected:
-                    if not peer.is_alive(timeout=20.0):
-                        dead_peers.append(peer_id)
-                    else:
-                        peer.send_ping()
-
-            for peer_id in dead_peers:
-                peer = self.peers.get(peer_id)
-                if peer:
-                    await peer.close()
-                if peer_id in self.peers:
-                    del self.peers[peer_id]
-                if self.on_peer_disconnected_callback:
-                    try:
-                        self.on_peer_disconnected_callback(peer_id)
-                    except Exception:
-                        pass
 
     async def start(self):
         self.running = True
         self.udp_responder_task = asyncio.create_task(self.udp_responder())
-        self.heartbeat_task = asyncio.create_task(self.heartbeat_loop())
 
         self.server = await asyncio.start_server(
             self.handle_signaling, "0.0.0.0", self.signaling_port
@@ -334,13 +310,6 @@ class ClipScapeNetwork:
             self.udp_responder_task.cancel()
             try:
                 await self.udp_responder_task
-            except asyncio.CancelledError:
-                pass
-
-        if self.heartbeat_task:
-            self.heartbeat_task.cancel()
-            try:
-                await self.heartbeat_task
             except asyncio.CancelledError:
                 pass
 

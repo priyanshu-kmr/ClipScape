@@ -89,18 +89,9 @@ class PeerNetworkService:
             await self.network.discover_and_connect(timeout=2.0)
 
             last_discovery = time.time()
-            last_health_check = time.time()
 
             while self._running:
                 await asyncio.sleep(1.0)
-
-                if time.time() - last_health_check > 5.0:
-                    connected_peers = self.network.get_connected_peers()
-                    if not connected_peers and time.time() - last_discovery > 10.0:
-                        logger.info("No connected peers, discovering...")
-                        await self.network.discover_and_connect(timeout=2.0)
-                        last_discovery = time.time()
-                    last_health_check = time.time()
 
                 if time.time() - last_discovery > self.discovery_interval:
                     logger.info("Re-discovering peers...")
