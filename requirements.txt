@@ -1,0 +1,14 @@
+pywin32; sys_platform == "win32"
+python-xlib; sys_platform == "linux"
+pyobjc-framework-Cocoa; sys_platform == "darwin"
+
+aiortc
+pydantic
+ulid-py
+Pillow
+python-dotenv
+
+redis
+fastapi
+uvicorn
+pytest
