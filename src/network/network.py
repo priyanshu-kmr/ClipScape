@@ -138,22 +138,28 @@ class ClipScapeNetwork:
             obj = json.loads(raw.decode())
 
             if obj.get("type") == "offer":
-                existing_peer_id = None
-                for pid in self.peers.keys():
-                    if pid.startswith(f"{incoming_ip}:"):
-                        existing_peer_id = pid
-                        break
+                remote_device_name = obj.get("device_name", "Unknown")
+                remote_port = obj.get("signaling_port", peer_addr[1])
 
-                if existing_peer_id and self.peers[existing_peer_id].is_connected:
+                peer_id = f"{incoming_ip}:{remote_port}"
+
+                if peer_id in self.peers and self.peers[peer_id].is_connected:
                     writer.close()
                     await writer.wait_closed()
                     return
 
-                peer_id = f"{incoming_ip}:{peer_addr[1]}"
-                peer = ClipScapePeer(peer_id=peer_id, peer_name="Unknown")
+                peer = ClipScapePeer(
+                    peer_id=peer_id, peer_name=remote_device_name)
                 self._setup_peer_callbacks(peer)
                 answer = await peer.handle_offer(obj["sdp"])
-                writer.write(json.dumps(answer).encode() + DELIM)
+
+                answer_with_meta = {
+                    **answer,
+                    "device_name": self.device_name,
+                    "signaling_port": self.signaling_port
+                }
+
+                writer.write(json.dumps(answer_with_meta).encode() + DELIM)
                 await writer.drain()
 
                 self.peers[peer_id] = peer
@@ -180,11 +186,17 @@ class ClipScapeNetwork:
             self._setup_peer_callbacks(peer)
             offer = await peer.create_offer()
 
+            offer_with_meta = {
+                **offer,
+                "device_name": self.device_name,
+                "signaling_port": self.signaling_port
+            }
+
             reader, writer = await asyncio.wait_for(
                 asyncio.open_connection(ip, port),
                 timeout=5.0
             )
-            writer.write(json.dumps(offer).encode() + DELIM)
+            writer.write(json.dumps(offer_with_meta).encode() + DELIM)
             await writer.drain()
 
             raw = await asyncio.wait_for(
@@ -237,10 +249,11 @@ class ClipScapeNetwork:
 
             dead_peers = []
             for peer_id, peer in list(self.peers.items()):
-                if not peer.is_alive(timeout=15.0):
-                    dead_peers.append(peer_id)
-                else:
-                    peer.send_ping()
+                if peer.is_connected:
+                    if not peer.is_alive(timeout=20.0):
+                        dead_peers.append(peer_id)
+                    else:
+                        peer.send_ping()
 
             for peer_id in dead_peers:
                 peer = self.peers.get(peer_id)
@@ -268,18 +281,12 @@ class ClipScapeNetwork:
     async def discover_and_connect(self, timeout=5.0):
         discovered = await self.udp_discover(timeout)
         for ip, port, name in discovered:
-            existing_peer_id = None
-            for pid in list(self.peers.keys()):
-                if pid.startswith(f"{ip}:"):
-                    existing_peer_id = pid
-                    break
+            peer_id = f"{ip}:{port}"
 
-            if existing_peer_id:
-                peer = self.peers.get(existing_peer_id)
-                if peer and not peer.is_connected:
-                    del self.peers[existing_peer_id]
-                    await self.connect_to_peer(ip, port, name)
-                elif not peer:
+            if peer_id in self.peers:
+                peer = self.peers[peer_id]
+                if not peer.is_connected:
+                    del self.peers[peer_id]
                     await self.connect_to_peer(ip, port, name)
             else:
                 await self.connect_to_peer(ip, port, name)

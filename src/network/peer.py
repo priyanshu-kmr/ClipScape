@@ -33,9 +33,7 @@ class ClipScapePeer:
             state = self.pc.connectionState
             if state == "connected":
                 self.is_connected = True
-                if self.on_open_callback:
-                    self.on_open_callback()
-            elif state in ["failed", "closed"]:
+            elif state in ["failed", "closed", "disconnected"]:
                 self.is_connected = False
                 if self.on_close_callback:
                     self.on_close_callback()
@@ -50,6 +48,7 @@ class ClipScapePeer:
         def on_open():
             self.is_connected = True
             self.last_pong_time = time.time()
+            self.last_ping_time = time.time()
             if self.on_open_callback:
                 self.on_open_callback()
 
@@ -102,7 +101,11 @@ class ClipScapePeer:
 
     async def create_offer(self) -> dict:
         self.is_offerer = True
-        self.data_channel = self.pc.createDataChannel("clipscape")
+        self.data_channel = self.pc.createDataChannel(
+            "clipscape",
+            ordered=True,
+            maxRetransmits=3
+        )
         self._setup_data_channel_handlers(self.data_channel)
         offer = await self.pc.createOffer()
         await self.pc.setLocalDescription(offer)
