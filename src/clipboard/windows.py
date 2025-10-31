@@ -253,12 +253,28 @@ class WindowsClipboard(ClipboardItem):
 
             elif clip_type == "image":
                 from PIL import Image
-                image = Image.open(io.BytesIO(payload))
-                output = io.BytesIO()
-                image.convert("RGB").save(output, "BMP")
-                data = output.getvalue()[14:]
-                wc.SetClipboardData(win32con.CF_DIB, data)
-                return True
+                try:
+                    image = Image.open(io.BytesIO(payload))
+
+                    if image.mode not in ("RGB", "RGBA"):
+                        image = image.convert("RGB")
+                    elif image.mode == "RGBA":
+                        background = Image.new(
+                            "RGB", image.size, (255, 255, 255))
+                        background.paste(image, mask=image.split()[3])
+                        image = background
+
+                    output = io.BytesIO()
+                    image.save(output, "BMP")
+                    bmp_data = output.getvalue()
+
+                    if len(bmp_data) > 14:
+                        dib_data = bmp_data[14:]
+                        wc.SetClipboardData(win32con.CF_DIB, dib_data)
+                        return True
+                    return False
+                except Exception:
+                    return False
 
             elif clip_type == "file":
                 from pathlib import Path

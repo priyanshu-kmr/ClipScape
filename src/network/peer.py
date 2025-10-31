@@ -1,5 +1,6 @@
 import json
 import time
+import uuid
 from typing import Optional, Callable, Any
 from aiortc import RTCPeerConnection, RTCSessionDescription, RTCConfiguration, RTCIceServer, RTCDataChannel
 
@@ -13,6 +14,7 @@ class ClipScapePeer:
         self.is_offerer = False
         self.last_pong_time = time.time()
         self.last_ping_time = 0
+        self._chunk_buffer = {}
 
         if ice_servers is None:
             ice_servers = [RTCIceServer(urls="stun:stun.l.google.com:19302")]
@@ -60,6 +62,32 @@ class ClipScapePeer:
                 elif message == "__PONG__":
                     self.last_pong_time = time.time()
                     return
+
+                if isinstance(message, str) and message.startswith("__CHUNK__"):
+                    try:
+                        chunk_data = json.loads(message[9:])
+                        chunk_id = chunk_data["id"]
+                        chunk_index = chunk_data["index"]
+                        total_chunks = chunk_data["total"]
+                        chunk_content = chunk_data["data"]
+
+                        if chunk_id not in self._chunk_buffer:
+                            self._chunk_buffer[chunk_id] = {}
+
+                        self._chunk_buffer[chunk_id][chunk_index] = chunk_content
+
+                        if len(self._chunk_buffer[chunk_id]) == total_chunks:
+                            full_message = "".join(
+                                self._chunk_buffer[chunk_id][i]
+                                for i in range(total_chunks)
+                            )
+                            del self._chunk_buffer[chunk_id]
+
+                            if self.on_message_callback:
+                                self.on_message_callback(full_message)
+                        return
+                    except Exception:
+                        pass
             except Exception:
                 pass
 
@@ -104,7 +132,27 @@ class ClipScapePeer:
         if not self.data_channel or self.data_channel.readyState != "open":
             return False
         try:
-            self.data_channel.send(message)
+            chunk_size = 16000
+            if len(message) <= chunk_size:
+                self.data_channel.send(message)
+                return True
+
+            chunk_id = str(uuid.uuid4())[:8]
+            total_chunks = (len(message) + chunk_size - 1) // chunk_size
+
+            for i in range(total_chunks):
+                start = i * chunk_size
+                end = min(start + chunk_size, len(message))
+                chunk = message[start:end]
+
+                chunk_msg = "__CHUNK__" + json.dumps({
+                    "id": chunk_id,
+                    "index": i,
+                    "total": total_chunks,
+                    "data": chunk
+                })
+                self.data_channel.send(chunk_msg)
+
             return True
         except Exception:
             return False
