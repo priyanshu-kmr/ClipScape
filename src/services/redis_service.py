@@ -1,10 +1,3 @@
-"""Redis service for ClipScape.
-
-Provides a higher level interface around ``database.redis_manager.RedisManager``
-so that other services can persist users, devices, and clipboard payloads
-without dealing with connection details.
-"""
-
 from __future__ import annotations
 
 import os
@@ -16,12 +9,10 @@ from urllib.parse import urlparse
 from database.redis_manager import RedisManager
 
 if TYPE_CHECKING:  # pragma: no cover - typing helper
-    from .ClipboardService import CapturedClipboard
+    from .clipboard_service import CapturedClipboard
 
 
 def _load_env_file(env_path: Optional[Path] = None) -> None:
-    """Populate ``os.environ`` with key=value pairs from a ``.env`` file."""
-
     path = env_path or Path(__file__).resolve().parents[2] / ".env"
     if not path.exists():
         return
@@ -77,7 +68,8 @@ class RedisConfig:
     def from_uri(cls, uri: str) -> "RedisConfig":
         parsed = urlparse(uri)
         if parsed.scheme not in {"redis", "rediss"}:
-            raise ValueError(f"Unsupported Redis URI scheme: {parsed.scheme!r}")
+            raise ValueError(
+                f"Unsupported Redis URI scheme: {parsed.scheme!r}")
 
         host = parsed.hostname or cls.host
         port = parsed.port or cls.port
@@ -100,8 +92,6 @@ class RedisConfig:
 
 
 class RedisService:
-    """Convenience wrapper that orchestrates Redis persistence."""
-
     def __init__(
         self,
         manager: Optional[RedisManager] = None,
@@ -110,9 +100,6 @@ class RedisService:
         self.config = config or RedisConfig.from_env()
         self.manager = manager or self.config.create_manager()
 
-    # ------------------------------------------------------------------
-    # User and device helpers
-    # ------------------------------------------------------------------
     def ensure_user(
         self,
         user_id: Optional[str] = None,
@@ -164,9 +151,6 @@ class RedisService:
             metadata=metadata,
         )
 
-    # ------------------------------------------------------------------
-    # Clipboard persistence
-    # ------------------------------------------------------------------
     def save_clipboard_payload(
         self,
         *,
@@ -176,7 +160,8 @@ class RedisService:
         metadata: Dict[str, Any],
         item_id: Optional[str] = None,
     ) -> str:
-        payload_bytes = payload if isinstance(payload, bytes) else payload.encode("utf-8")
+        payload_bytes = payload if isinstance(
+            payload, bytes) else payload.encode("utf-8")
         return self.manager.create_clipboard_item(
             device_id=device_id,
             user_id=user_id,
@@ -199,7 +184,8 @@ class RedisService:
         metadata.setdefault("owner_device", device_id)
 
         payload = captured.payload
-        payload_bytes = payload if isinstance(payload, bytes) else payload.encode("utf-8")
+        payload_bytes = payload if isinstance(
+            payload, bytes) else payload.encode("utf-8")
 
         return self.save_clipboard_payload(
             user_id=user_id,
@@ -208,9 +194,6 @@ class RedisService:
             metadata=metadata,
         )
 
-    # ------------------------------------------------------------------
-    # Network helpers
-    # ------------------------------------------------------------------
     def ensure_network(
         self,
         *,
@@ -241,9 +224,6 @@ class RedisService:
             devices=device_list,
         )
 
-    # ------------------------------------------------------------------
-    # Passthrough helpers
-    # ------------------------------------------------------------------
     def get_user_clipboards(self, user_id: str, limit: int = 50):
         return self.manager.get_user_clipboards(user_id, limit=limit)
 

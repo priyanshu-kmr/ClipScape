@@ -1,6 +1,6 @@
-"""Service layer for ClipScape."""
 
-from .ClipboardService import ClipboardService
-from .RedisService import RedisService
+
+from .clipboard_service import ClipboardService
+from .redis_service import RedisService
 
 __all__ = ["ClipboardService", "RedisService"]

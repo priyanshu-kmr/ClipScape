@@ -1,5 +1,3 @@
-"""Linux-specific clipboard implementation."""
-
 import datetime
 import mimetypes
 import os
@@ -14,9 +12,7 @@ import ulid
 from clipboard.base import ClipboardItem
 
 
-class CBI_Linux(ClipboardItem):
-    """Linux-specific implementation of ClipboardItem."""
-
+class LinuxClipboard(ClipboardItem):
     _FILE_TARGETS = {"x-special/gnome-copied-files", "text/uri-list"}
     _IMAGE_TARGETS = {
         "image/png": "image/png",
@@ -72,7 +68,8 @@ class CBI_Linux(ClipboardItem):
         if result:
             return result
 
-        text_bytes = self._run_command(["wl-paste", "--no-newline"], timeout=1.5)
+        text_bytes = self._run_command(
+            ["wl-paste", "--no-newline"], timeout=1.5)
         if text_bytes:
             return self._build_text_item(text_bytes)
 
@@ -149,15 +146,25 @@ class CBI_Linux(ClipboardItem):
 
     def _build_file_item(self, data: bytes) -> Optional[Tuple[bytes, Dict[str, Any]]]:
         for path in self._parse_paths(data):
-            if not path.exists() or not path.is_file():
+            if not path.exists():
                 continue
 
+            if path.is_dir():
+                return self._build_folder_item(path)
+
+            if not path.is_file():
+                continue
+
+            MAX_FILE_SIZE = 100 * 1024 * 1024
             try:
-                payload = path.read_bytes()
-                file_size = len(payload)
+                file_size = path.stat().st_size
+                if file_size > MAX_FILE_SIZE:
+                    payload = b""
+                else:
+                    payload = path.read_bytes()
             except OSError:
                 payload = b""
-                file_size = path.stat().st_size if path.exists() else None
+                file_size = 0
 
             try:
                 creation_time = datetime.datetime.fromtimestamp(
@@ -181,6 +188,43 @@ class CBI_Linux(ClipboardItem):
 
         return None
 
+    def _build_folder_item(self, folder_path: Path) -> Optional[Tuple[bytes, Dict[str, Any]]]:
+        import zipfile
+        from io import BytesIO
+
+        try:
+            zip_buffer = BytesIO()
+            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                for file_path in folder_path.rglob('*'):
+                    if file_path.is_file():
+                        arcname = file_path.relative_to(folder_path)
+                        try:
+                            zip_file.write(file_path, arcname)
+                        except Exception:
+                            pass
+
+            payload = zip_buffer.getvalue()
+
+            try:
+                creation_time = datetime.datetime.fromtimestamp(
+                    folder_path.stat().st_ctime
+                ).isoformat()
+            except OSError:
+                creation_time = None
+
+            metadata = {
+                "type": "folder",
+                "folder_name": folder_path.name,
+                "file_size": len(payload),
+                "creation_time": creation_time,
+                "path": str(folder_path),
+                "mime": "application/zip",
+                "owner_device": ""
+            }
+            return payload, metadata
+        except Exception:
+            return None
+
     def _build_image_item(
         self, payload: bytes, mime_type: str
     ) -> Optional[Tuple[bytes, Dict[str, Any]]]:
@@ -191,11 +235,7 @@ class CBI_Linux(ClipboardItem):
         extension = mimetypes.guess_extension(mime_type) or ""
         if extension in {".jpe", ""}:
             extension = ".jpeg" if mime_type == "image/jpeg" else ".bin"
-        identifier = (
-            str(ulid.ULID.from_datetime(creation_time))
-            if ulid is not None
-            else uuid.uuid4().hex
-        )
+        identifier = str(ulid.new()) if ulid is not None else uuid.uuid4().hex
         file_name = f"{identifier}{extension}"
 
         metaData = {
@@ -231,7 +271,8 @@ class CBI_Linux(ClipboardItem):
 
     def _parse_paths(self, data: bytes) -> List[Path]:
         text = data.decode("utf-8", errors="ignore")
-        lines = [line.strip() for line in text.replace("\r", "\n").split("\n") if line.strip()]
+        lines = [line.strip() for line in text.replace(
+            "\r", "\n").split("\n") if line.strip()]
         if lines and lines[0].lower() in {"copy", "cut"}:
             lines = lines[1:]
 
@@ -259,3 +300,187 @@ class CBI_Linux(ClipboardItem):
             return result.stdout
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
             return None
+
+    def _set_clipboard(self, payload: bytes, metadata: Dict[str, Any]) -> bool:
+        clip_type = metadata.get("type", "text")
+
+        try:
+            if shutil.which("wl-copy"):
+                if clip_type == "text":
+                    text = payload.decode("utf-8", errors="ignore")
+                    subprocess.run(
+                        ["wl-copy"],
+                        input=text.encode("utf-8"),
+                        check=True,
+                        timeout=2.0
+                    )
+                    return True
+                elif clip_type == "image":
+                    mime = metadata.get("mime", "image/png")
+                    subprocess.run(
+                        ["wl-copy", "--type", mime],
+                        input=payload,
+                        check=True,
+                        timeout=2.0
+                    )
+                    return True
+                elif clip_type == "file":
+                    from utils.file_manager import FileManager
+
+                    file_manager = FileManager()
+                    file_path = file_manager.save_file(payload, metadata)
+
+                    if file_path and file_path.exists():
+                        uri = file_path.as_uri()
+                        subprocess.run(
+                            ["wl-copy", "--type", "text/uri-list"],
+                            input=uri.encode("utf-8"),
+                            check=True,
+                            timeout=2.0
+                        )
+                        return True
+                    return False
+                elif clip_type == "folder":
+                    from utils.file_manager import FileManager
+                    import zipfile
+                    import tempfile
+
+                    folder_name = metadata.get("folder_name", "folder")
+
+                    temp_dir = Path(tempfile.gettempdir()) / \
+                        ".clipscape_temp" / folder_name
+                    temp_dir.mkdir(parents=True, exist_ok=True)
+
+                    try:
+                        from io import BytesIO
+                        zip_bytes = BytesIO(payload)
+                        with zipfile.ZipFile(zip_bytes, 'r') as zip_file:
+                            zip_file.extractall(temp_dir)
+
+                        uri = temp_dir.as_uri()
+                        subprocess.run(
+                            ["wl-copy", "--type", "text/uri-list"],
+                            input=uri.encode("utf-8"),
+                            check=True,
+                            timeout=2.0
+                        )
+                        return True
+                    except Exception:
+                        return False
+                elif clip_type == "file_group":
+                    from utils.file_manager import FileManager
+
+                    file_manager = FileManager()
+                    file_names = metadata.get("file_names", [])
+
+                    uris = []
+                    for file_name in file_names:
+                        file_meta = {"file_name": file_name}
+                        file_path = file_manager.save_file(b"", file_meta)
+                        if file_path and file_path.exists():
+                            uris.append(file_path.as_uri())
+
+                    if uris:
+                        uri_list = "\n".join(uris)
+                        subprocess.run(
+                            ["wl-copy", "--type", "text/uri-list"],
+                            input=uri_list.encode("utf-8"),
+                            check=True,
+                            timeout=2.0
+                        )
+                        return True
+                    return False
+
+            elif shutil.which("xclip"):
+                if clip_type == "text":
+                    text = payload.decode("utf-8", errors="ignore")
+                    subprocess.run(
+                        ["xclip", "-selection", "clipboard"],
+                        input=text.encode("utf-8"),
+                        check=True,
+                        timeout=2.0
+                    )
+                    return True
+                elif clip_type == "image":
+                    mime = metadata.get("mime", "image/png")
+                    subprocess.run(
+                        ["xclip", "-selection", "clipboard", "-t", mime],
+                        input=payload,
+                        check=True,
+                        timeout=2.0
+                    )
+                    return True
+                elif clip_type == "file":
+                    from utils.file_manager import FileManager
+
+                    file_manager = FileManager()
+                    file_path = file_manager.save_file(payload, metadata)
+
+                    if file_path and file_path.exists():
+                        uri = file_path.as_uri()
+                        subprocess.run(
+                            ["xclip", "-selection", "clipboard",
+                                "-t", "text/uri-list"],
+                            input=uri.encode("utf-8"),
+                            check=True,
+                            timeout=2.0
+                        )
+                        return True
+                    return False
+                elif clip_type == "folder":
+                    from utils.file_manager import FileManager
+                    import zipfile
+                    import tempfile
+
+                    folder_name = metadata.get("folder_name", "folder")
+
+                    temp_dir = Path(tempfile.gettempdir()) / \
+                        ".clipscape_temp" / folder_name
+                    temp_dir.mkdir(parents=True, exist_ok=True)
+
+                    try:
+                        from io import BytesIO
+                        zip_bytes = BytesIO(payload)
+                        with zipfile.ZipFile(zip_bytes, 'r') as zip_file:
+                            zip_file.extractall(temp_dir)
+
+                        uri = temp_dir.as_uri()
+                        subprocess.run(
+                            ["xclip", "-selection", "clipboard",
+                                "-t", "text/uri-list"],
+                            input=uri.encode("utf-8"),
+                            check=True,
+                            timeout=2.0
+                        )
+                        return True
+                    except Exception:
+                        return False
+                elif clip_type == "file_group":
+                    from utils.file_manager import FileManager
+
+                    file_manager = FileManager()
+                    file_names = metadata.get("file_names", [])
+
+                    uris = []
+                    for file_name in file_names:
+                        file_meta = {"file_name": file_name}
+                        file_path = file_manager.save_file(b"", file_meta)
+                        if file_path and file_path.exists():
+                            uris.append(file_path.as_uri())
+
+                    if uris:
+                        uri_list = "\n".join(uris)
+                        subprocess.run(
+                            ["xclip", "-selection", "clipboard",
+                                "-t", "text/uri-list"],
+                            input=uri_list.encode("utf-8"),
+                            check=True,
+                            timeout=2.0
+                        )
+                        return True
+                    return False
+
+            return False
+
+        except Exception:
+            return False
