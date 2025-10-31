@@ -1,4 +1,5 @@
 import json
+import time
 from typing import Optional, Callable, Any
 from aiortc import RTCPeerConnection, RTCSessionDescription, RTCConfiguration, RTCIceServer, RTCDataChannel
 
@@ -10,6 +11,8 @@ class ClipScapePeer:
         self.peer_name = peer_name
         self.is_connected = False
         self.is_offerer = False
+        self.last_pong_time = time.time()
+        self.last_ping_time = 0
 
         if ice_servers is None:
             ice_servers = [RTCIceServer(urls="stun:stun.l.google.com:19302")]
@@ -44,11 +47,22 @@ class ClipScapePeer:
         @channel.on("open")
         def on_open():
             self.is_connected = True
+            self.last_pong_time = time.time()
             if self.on_open_callback:
                 self.on_open_callback()
 
         @channel.on("message")
         def on_message(message):
+            try:
+                if message == "__PING__":
+                    self.send_message("__PONG__")
+                    return
+                elif message == "__PONG__":
+                    self.last_pong_time = time.time()
+                    return
+            except Exception:
+                pass
+
             if self.on_message_callback:
                 self.on_message_callback(message)
 
@@ -101,6 +115,15 @@ class ClipScapePeer:
             return self.send_message(message)
         except Exception:
             return False
+
+    def send_ping(self) -> bool:
+        self.last_ping_time = time.time()
+        return self.send_message("__PING__")
+
+    def is_alive(self, timeout: float = 15.0) -> bool:
+        if not self.is_connected:
+            return False
+        return (time.time() - self.last_pong_time) < timeout
 
     def on_message(self, callback: Callable[[str], None]):
         self.on_message_callback = callback

@@ -18,6 +18,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+logging.getLogger('aioice').setLevel(logging.WARNING)
+logging.getLogger('aiortc').setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 
