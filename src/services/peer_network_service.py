@@ -3,9 +3,9 @@ import logging
 import threading
 import time
 from typing import Optional, Callable, Dict, Any
-import base64
 import json
 
+from core.wire import encode_clipboard_message, is_clipboard_message
 from network.network import ClipScapeNetwork
 
 logger = logging.getLogger(__name__)
@@ -114,7 +114,7 @@ class PeerNetworkService:
         try:
             data = json.loads(message)
 
-            if data.get("type") in ["clipboard_text", "clipboard_image", "clipboard_file"]:
+            if is_clipboard_message(data):
                 if self.on_clipboard_received_callback:
                     self.on_clipboard_received_callback(data)
 
@@ -146,25 +146,11 @@ class PeerNetworkService:
         return 0
 
     def _prepare_clipboard_message(self, clipboard_data: Dict[str, Any]) -> str:
-        metadata = clipboard_data.get("metadata", {})
-        payload = clipboard_data.get("payload", b"")
-        timestamp = clipboard_data.get("timestamp", "")
-        clip_type = metadata.get("type", "text")
-
-        if isinstance(payload, bytes):
-            payload_b64 = base64.b64encode(payload).decode("ascii")
-        else:
-            payload_b64 = base64.b64encode(
-                str(payload).encode("utf-8")).decode("ascii")
-
-        message = {
-            "type": f"clipboard_{clip_type}",
-            "payload": payload_b64,
-            "metadata": metadata,
-            "timestamp": timestamp
-        }
-
-        return json.dumps(message)
+        return encode_clipboard_message(
+            payload=clipboard_data.get("payload", b""),
+            metadata=clipboard_data.get("metadata", {}),
+            timestamp=clipboard_data.get("timestamp", ""),
+        )
 
     def send_to_peer(self, peer_id: str, message: str) -> bool:
         if not self._running or not self.network or not self._loop:

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Callable, Optional, Union, Dict, Any
 
 from clipboard import get_clipboard_item, ClipboardItem
+from core.payload import poll_fingerprint
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +80,6 @@ class ClipboardService:
             self.stop()
 
     def _poll_loop(self) -> None:
-        import hashlib
         last_hash = None
         first_run = True
 
@@ -92,22 +92,7 @@ class ClipboardService:
                 payload, meta = None, None
 
             if meta is not None:
-                meta_str = str(sorted(meta.items()))
-                clip_type = meta.get('type', 'unknown')
-
-                if clip_type in ['file', 'folder', 'file_group']:
-                    path_info = meta.get('path', '') or meta.get('paths', [])
-                    file_name = meta.get('file_name', '') or meta.get(
-                        'folder_name', '')
-                    hash_input = f"{clip_type}:{path_info}:{file_name}:{meta.get('file_size', 0)}".encode(
-                        'utf-8')
-                elif isinstance(payload, bytes):
-                    hash_input = payload[:1024] + meta_str.encode('utf-8')
-                else:
-                    hash_input = str(payload).encode(
-                        'utf-8') + meta_str.encode('utf-8')
-
-                current_hash = hashlib.md5(hash_input).hexdigest()
+                current_hash = poll_fingerprint(payload, meta)
             else:
                 current_hash = None
 
