@@ -5,6 +5,7 @@ from app.sync import ClipboardSync
 from core.wire import encode_clipboard_message
 from services.clipboard_service import CapturedClipboard
 from services.clipboard_store import LOCAL, REMOTE
+from services.pending_queue import PendingClipQueue
 
 
 class FakeStore:
@@ -107,6 +108,75 @@ class TestLocalCapture:
         ClipboardSync(None, broadcast=sent.append, clipboard_writer=FakeWriter(),
                       echo_guard_delay=0.0).on_local_capture(clip("hello"))
         assert len(sent) == 1
+
+
+class TestApprovalGating:
+    def _sync(self, store=None, sent=None, queue=None):
+        return ClipboardSync(
+            store if store is not None else FakeStore(),
+            broadcast=sent.append if sent is not None else None,
+            clipboard_writer=FakeWriter(),
+            echo_guard_delay=0.0,
+            pending_queue=queue if queue is not None else PendingClipQueue(),
+        )
+
+    def test_capture_goes_to_queue_not_broadcast(self):
+        queue, sent = PendingClipQueue(), []
+        self._sync(sent=sent, queue=queue).on_local_capture(clip("hello"))
+        assert sent == []
+        assert len(queue.list_pending()) == 1
+
+    def test_store_still_saves_immediately_in_approval_mode(self):
+        store = FakeStore()
+        self._sync(store=store).on_local_capture(clip("hello"))
+        assert len(store.saved) == 1
+        assert store.saved[0][0] == LOCAL
+
+    def test_multiple_captures_all_remain_pending(self):
+        queue = PendingClipQueue()
+        sync = self._sync(queue=queue)
+        sync.on_local_capture(clip("one"))
+        sync.on_local_capture(clip("two"))
+        sync.on_local_capture(clip("three"))
+        pending = queue.list_pending()
+        assert len(pending) == 3
+        assert len({p.id for p in pending}) == 3
+
+    def test_approve_broadcasts_the_pending_item_with_original_payload(self):
+        queue, sent = PendingClipQueue(), []
+        sync = self._sync(sent=sent, queue=queue)
+        sync.on_local_capture(clip("hello"))
+        pending_id = queue.list_pending()[0].id
+
+        assert sync.approve(pending_id) is True
+        assert sent == [{"payload": "hello",
+                         "metadata": {"type": "text"}, "timestamp": "T"}]
+        assert queue.list_pending() == []
+
+    def test_approve_unknown_id_returns_false_and_does_not_broadcast(self):
+        sent = []
+        sync = self._sync(sent=sent)
+        assert sync.approve("does-not-exist") is False
+        assert sent == []
+
+    def test_reject_removes_without_ever_broadcasting(self):
+        queue, sent = PendingClipQueue(), []
+        sync = self._sync(sent=sent, queue=queue)
+        sync.on_local_capture(clip("hello"))
+        pending_id = queue.list_pending()[0].id
+
+        assert sync.reject(pending_id) is True
+        assert sent == []
+        assert queue.list_pending() == []
+
+    def test_reject_unknown_id_returns_false(self):
+        sync = self._sync()
+        assert sync.reject("does-not-exist") is False
+
+    def test_approve_and_reject_are_no_ops_without_a_pending_queue(self):
+        sync = make_sync()
+        assert sync.approve("anything") is False
+        assert sync.reject("anything") is False
 
 
 class TestRemoteMessage:

@@ -7,9 +7,11 @@ from typing import Optional
 
 from app.config import AppConfig
 from app.sync import ClipboardSync
+from services.approval_api_service import ApprovalApiService
 from services.clipboard_service import ClipboardService
 from services.clipboard_store import ClipboardStore, cleanup_managed_files
 from services.peer_network_service import PeerNetworkService
+from services.pending_queue import PendingClipQueue
 from services.redis_service import RedisService
 
 logger = logging.getLogger(__name__)
@@ -25,6 +27,8 @@ class ClipScapeApp:
         self.redis_service: Optional[RedisService] = None
         self.store: Optional[ClipboardStore] = None
         self.sync: Optional[ClipboardSync] = None
+        self.pending_queue: Optional[PendingClipQueue] = None
+        self.approval_api: Optional[ApprovalApiService] = None
         self.user_id: Optional[str] = None
         self.device_id: Optional[str] = None
         self.running = False
@@ -55,10 +59,18 @@ class ClipScapeApp:
                 discovery_interval=self.config.discovery_interval
             )
 
-            self.sync = ClipboardSync(
-                self.store,
-                broadcast=self.network_service.broadcast_clipboard,
-            )
+            if self.config.approval_ui:
+                self.pending_queue = PendingClipQueue()
+                self.sync = ClipboardSync(
+                    self.store,
+                    broadcast=self.network_service.broadcast_clipboard,
+                    pending_queue=self.pending_queue,
+                )
+            else:
+                self.sync = ClipboardSync(
+                    self.store,
+                    broadcast=self.network_service.broadcast_clipboard,
+                )
 
             self.network_service.on_clipboard_received(
                 self.sync.on_remote_message)
@@ -67,6 +79,20 @@ class ClipScapeApp:
                 logger.error("Network service failed to start")
                 self.stop()
                 return
+
+            if self.config.approval_ui:
+                self.approval_api = ApprovalApiService(
+                    self.pending_queue,
+                    self.sync,
+                    host=self.config.approval_api_host,
+                    port=self.config.approval_api_port,
+                    cors_origins=[self.config.approval_cors_origin],
+                    auto_start=True,
+                )
+                if not self.approval_api.wait_until_ready(timeout=10.0):
+                    logger.error("Approval API service failed to start")
+                    self.stop()
+                    return
 
             self.clipboard_service = ClipboardService(
                 on_capture=self.sync.on_local_capture,
@@ -104,6 +130,9 @@ class ClipScapeApp:
 
         if self.clipboard_service:
             self.clipboard_service.stop()
+
+        if self.approval_api:
+            self.approval_api.stop()
 
         if self.network_service:
             self.network_service.stop()

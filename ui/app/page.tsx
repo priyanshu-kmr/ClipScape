@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { CardData, ClipCard } from "@/app/components/ClipCard";
 import { Device, DeviceItem } from "@/app/components/DeviceItem";
+import { PendingClipsList } from "@/app/components/PendingClipsList";
 type ConnectionState = "idle" | "connecting" | "connected" | "error" | "disconnected";
 
 const statusColors: Record<ConnectionState, string> = {
@@ -170,6 +171,8 @@ export default function Home() {
                 <span className="rounded-full bg-white/5 px-3 py-1 font-medium text-slate-200 shadow-sm">Hover to reveal metadata</span>
               </div>
             </div>
+
+            <PendingClipsList />
 
             <ClipCard card={demoCard} />
           </div>

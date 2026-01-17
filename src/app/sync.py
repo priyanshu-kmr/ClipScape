@@ -15,6 +15,7 @@ from core.payload import content_fingerprint
 from core.wire import decode_clipboard_message
 from services.clipboard_service import CapturedClipboard
 from services.clipboard_store import LOCAL, REMOTE, ClipboardStore
+from services.pending_queue import PendingClipQueue
 
 logger = logging.getLogger(__name__)
 
@@ -38,12 +39,14 @@ class ClipboardSync:
                                    bool] = _default_clipboard_writer,
         echo_guard_delay: float = 0.1,
         now: Callable[[], str] = _now,
+        pending_queue: Optional[PendingClipQueue] = None,
     ) -> None:
         self._store = store
         self._broadcast = broadcast
         self._write_clipboard = clipboard_writer
         self._echo_guard_delay = echo_guard_delay
         self._now = now
+        self._pending_queue = pending_queue
 
         self._last_sent_hash: Optional[str] = None
         self._setting_clipboard = False
@@ -63,6 +66,11 @@ class ClipboardSync:
         if self._store:
             self._store.save(captured, origin=LOCAL)
 
+        if self._pending_queue is not None:
+            pending = self._pending_queue.add(captured)
+            logger.info(f"Queued for approval: {clip_type} ({pending.id})")
+            return
+
         if self._broadcast is not None:
             clipboard_data = {
                 "payload": captured.payload,
@@ -71,6 +79,33 @@ class ClipboardSync:
             }
             logger.info(f"Broadcasting clipboard: {clip_type}")
             self._broadcast(clipboard_data)
+
+    def approve(self, clip_id: str) -> bool:
+        if self._pending_queue is None:
+            return False
+
+        pending = self._pending_queue.pop(clip_id)
+        if pending is None:
+            return False
+
+        if self._broadcast is not None:
+            clipboard_data = {
+                "payload": pending.captured.payload,
+                "metadata": pending.captured.metadata,
+                "timestamp": pending.captured.timestamp,
+            }
+            clip_type = pending.captured.metadata.get('type', 'unknown')
+            logger.info(
+                f"Broadcasting approved clipboard: {clip_type} ({clip_id})")
+            self._broadcast(clipboard_data)
+
+        return True
+
+    def reject(self, clip_id: str) -> bool:
+        if self._pending_queue is None:
+            return False
+
+        return self._pending_queue.pop(clip_id) is not None
 
     def on_remote_message(self, data: Dict[str, Any]) -> None:
         try:

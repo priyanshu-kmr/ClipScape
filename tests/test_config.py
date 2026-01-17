@@ -52,7 +52,10 @@ class TestCreate:
 class TestFromArgs:
     def _args(self, **overrides):
         base = dict(port=9999, name=None, poll_interval=0.25,
-                    discovery_interval=30.0, no_redis=False)
+                    discovery_interval=30.0, no_redis=False,
+                    approval_ui=False, approval_api_host="127.0.0.1",
+                    approval_api_port=8787,
+                    approval_cors_origin="http://localhost:3000")
         base.update(overrides)
         return argparse.Namespace(**base)
 
@@ -70,3 +73,30 @@ class TestFromArgs:
     def test_missing_name_resolves_the_default(self, monkeypatch):
         monkeypatch.setattr("socket.gethostname", lambda: "box.local")
         assert AppConfig.from_args(self._args()).device_name == "box"
+
+
+class TestApprovalUiFlag:
+    def test_defaults_to_off(self):
+        config = AppConfig.create(port=1, device_name="a")
+        assert config.approval_ui is False
+        assert config.approval_api_host == "127.0.0.1"
+        assert config.approval_api_port == 8787
+        assert config.approval_cors_origin == "http://localhost:3000"
+
+    def test_from_args_maps_approval_fields(self):
+        args = TestFromArgs()._args(
+            approval_ui=True, approval_api_host="0.0.0.0",
+            approval_api_port=9001,
+            approval_cors_origin="http://localhost:5173")
+        config = AppConfig.from_args(args)
+        assert config.approval_ui is True
+        assert config.approval_api_host == "0.0.0.0"
+        assert config.approval_api_port == 9001
+        assert config.approval_cors_origin == "http://localhost:5173"
+
+    def test_from_args_defaults_match_create_defaults(self):
+        config = AppConfig.from_args(TestFromArgs()._args())
+        assert config.approval_ui is False
+        assert config.approval_api_host == "127.0.0.1"
+        assert config.approval_api_port == 8787
+        assert config.approval_cors_origin == "http://localhost:3000"

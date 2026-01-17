@@ -11,4 +11,5 @@ python-dotenv
 redis
 fastapi
 uvicorn
+httpx
 pytest

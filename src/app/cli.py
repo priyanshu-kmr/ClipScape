@@ -57,6 +57,37 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         help="Disable Redis clipboard persistence"
     )
 
+    parser.add_argument(
+        "--approval-ui",
+        action="store_true",
+        help="Route locally captured clips through an approval queue exposed via "
+             "a local HTTP API instead of broadcasting them immediately (opt-in, "
+             "default: off)"
+    )
+
+    parser.add_argument(
+        "--approval-api-host",
+        type=str,
+        default="127.0.0.1",
+        help="Host/interface for the local approval API server (default: 127.0.0.1, "
+             "only used with --approval-ui)"
+    )
+
+    parser.add_argument(
+        "--approval-api-port",
+        type=int,
+        default=8787,
+        help="Port for the local approval API server (default: 8787, only used "
+             "with --approval-ui)"
+    )
+
+    parser.add_argument(
+        "--approval-cors-origin",
+        type=str,
+        default="http://localhost:3000",
+        help="Allowed CORS origin for the approval API (default: http://localhost:3000)"
+    )
+
     return parser.parse_args(argv)
 
 

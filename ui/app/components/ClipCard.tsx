@@ -45,8 +45,17 @@ const formatMeta = (card: CardData) => {
   return entries;
 };
 
-export function ClipCard({ card }: { card: CardData }) {
+export function ClipCard({
+  card,
+  onApprove,
+  onReject,
+}: {
+  card: CardData;
+  onApprove?: () => void;
+  onReject?: () => void;
+}) {
   const meta = formatMeta(card);
+  const pendingApproval = Boolean(onApprove || onReject);
 
   return (
     <article className="group relative overflow-hidden rounded-3xl border border-white/10 bg-gradient-to-br from-[#161a22] via-[#10131a] to-[#0c0f14] shadow-[0_20px_80px_-35px_rgba(0,0,0,0.65)] transition-transform duration-400 ease-out hover:-translate-y-1 hover:shadow-[0_25px_90px_-30px_rgba(0,0,0,0.75)]">
@@ -59,8 +68,8 @@ export function ClipCard({ card }: { card: CardData }) {
           {card.type === "image" && "Image"}
           {card.type === "file" && "File"}
           {card.type === "text" && "Text"}
-          <span className="h-1 w-1 rounded-full bg-emerald-400/70" />
-          Synced
+          <span className={`h-1 w-1 rounded-full ${pendingApproval ? "bg-amber-300/70" : "bg-emerald-400/70"}`} />
+          {pendingApproval ? "Pending Approval" : "Synced"}
         </div>
 
         <div className="flex items-start justify-between gap-4">
@@ -78,6 +87,27 @@ export function ClipCard({ card }: { card: CardData }) {
             ) : null}
           </div>
         </div>
+
+        {(onApprove || onReject) && (
+          <div className="flex gap-3">
+            {onApprove && (
+              <button
+                onClick={onApprove}
+                className="rounded-full border border-emerald-400/30 bg-emerald-400/10 px-4 py-2 text-sm font-semibold text-emerald-300 shadow-sm transition hover:border-emerald-400/60 hover:bg-emerald-400/20 focus:outline-none focus:ring-2 focus:ring-emerald-400/60"
+              >
+                Approve
+              </button>
+            )}
+            {onReject && (
+              <button
+                onClick={onReject}
+                className="rounded-full border border-rose-400/30 bg-rose-400/10 px-4 py-2 text-sm font-semibold text-rose-300 shadow-sm transition hover:border-rose-400/60 hover:bg-rose-400/20 focus:outline-none focus:ring-2 focus:ring-rose-400/60"
+              >
+                Reject
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="mt-4 overflow-hidden rounded-2xl border border-white/10 bg-[linear-gradient(180deg,rgba(20,24,32,0.7),rgba(12,15,20,0.94))] backdrop-blur-lg transition-[max-height,opacity,transform] duration-500 ease-out max-h-0 opacity-0 -translate-y-2 group-hover:max-h-[360px] group-hover:opacity-100 group-hover:translate-y-0">
